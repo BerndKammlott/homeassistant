@@ -19,9 +19,10 @@
 # - Select your presence entities and all heaters you want controlled by this rule.
 
 blueprint:
-  name: Heating setback when everyone is away (presence)
+  name: Heating setback when everyone is away (presence) v2
   description: Set heaters to away temperature when all selected people are away; resume when anyone is home.
   domain: automation
+  source_url: https://hiller-intranet.local/blueprints/presence_setback.yaml
   input:
     presence_entities:
       name: Presence entities (people/devices)
@@ -29,6 +30,7 @@ blueprint:
       selector:
         entity:
           multiple: true
+          # Note: use domain list (supported by HA) — do not use 'include' here
           domain:
             - person
             - device_tracker
