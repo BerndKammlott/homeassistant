@@ -1,0 +1,212 @@
+# Home Assistant Blueprint — Presence-based heating setback (home/away)
+#
+# Purpose
+# - When everyone is away, set selected heaters to an "away" temperature (default 18 °C).
+# - When anyone comes home again, resume heating per your chosen resume mode.
+#
+# Notes
+# - Presence sources: use person.* and/or device_tracker.* entities that report home/not_home.
+# - Heaters: climate.* (preferred) and/or switch.* (relay valves, etc.). You can mix them.
+# - This blueprint is independent of the window-open cutoff blueprint (heater.yaml). You can run both.
+# - Resume modes:
+#   * heat: sets HVAC mode to heat and applies comfort_temp (°C) to climate entities; turns on switches.
+#   * previous: resumes HVAC mode to heat without forcing a temperature (simple restore).
+#     For exact per-entity setpoint restore, extend with helpers if needed.
+# - YAML selector safety: label/value is used for select options to avoid YAML keyword pitfalls (e.g., off).
+#
+# Import & use
+# - Settings → Automations & Scenes → Blueprints → Import this file, then create an automation from it.
+# - Select your presence entities and all heaters you want controlled by this rule.
+
+blueprint:
+  name: Heating setback when everyone is away (presence)
+  description: Set heaters to away temperature when all selected people are away; resume when anyone is home.
+  domain: automation
+  input:
+    presence_entities:
+      name: Presence entities (people/devices)
+      description: person.* and/or device_tracker.* that indicate home/not_home
+      selector:
+        entity:
+          multiple: true
+          include:
+            - domain: person
+            - domain: device_tracker
+
+    climate_targets:
+      name: Climate entities to control
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: climate
+
+    switch_targets:
+      name: Switch-based heaters (optional)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: switch
+
+    away_delay:
+      name: Away delay (seconds)
+      description: How long everyone must be away before applying setback
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 7200
+          unit_of_measurement: s
+          mode: slider
+          step: 10
+
+    target_away_temp:
+      name: Away temperature (°C)
+      default: 18
+      selector:
+        number:
+          min: 5
+          max: 28
+          step: 0.5
+
+    resume_mode:
+      name: Resume mode when someone returns
+      description: Fixed comfort temperature or simple heat resume without forcing temperature
+      default: "heat"
+      selector:
+        select:
+          options:
+            - label: "Heat"
+              value: "heat"
+            - label: "Restore previous"
+              value: "previous"
+
+    comfort_temp:
+      name: Comfort temperature (°C) on return (if using heat)
+      default: 21
+      selector:
+        number:
+          min: 5
+          max: 28
+          step: 0.5
+
+mode: parallel
+max: 10
+
+variables:
+  presence_entities: !input presence_entities
+  climates: !input climate_targets
+  switches: !input switch_targets
+  away_delay: !input away_delay
+  target_away_temp: !input target_away_temp
+  resume_mode: !input resume_mode
+  comfort_temp: !input comfort_temp
+
+# We use template triggers so the logic evaluates group-like conditions across multiple entities.
+trigger:
+  # All away (for away_delay)
+  - platform: template
+    value_template: >
+      {% set home_count = presence_entities | select('is_state', 'home') | list | count %}
+      {% set total = presence_entities | count %}
+      {{ total > 0 and home_count == 0 }}
+    for:
+      seconds: !input away_delay
+
+  # Someone home (debounce a few seconds)
+  - platform: template
+    value_template: >
+      {{ (presence_entities | select('is_state', 'home') | list | count) > 0 }}
+    for:
+      seconds: 10
+
+condition: []
+
+action:
+  - choose:
+      # Apply away setback
+      - conditions:
+          - condition: template
+            value_template: >
+              {% set home_count = presence_entities | select('is_state', 'home') | list | count %}
+              {% set total = presence_entities | count %}
+              {{ total > 0 and home_count == 0 }}
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ climates | count > 0 }}"
+            then:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ climates }}"
+                data:
+                  hvac_mode: heat
+              - service: climate.set_temperature
+                target:
+                  entity_id: "{{ climates }}"
+                data:
+                  temperature: "{{ target_away_temp }}"
+          - if:
+              - condition: template
+                value_template: "{{ switches | count > 0 }}"
+            then:
+              - service: switch.turn_off
+                target:
+                  entity_id: "{{ switches }}"
+
+      # Resume when anyone is home
+      - conditions:
+          - condition: template
+            value_template: >
+              {{ (presence_entities | select('is_state', 'home') | list | count) > 0 }}
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_mode == 'previous' }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: "{{ climates | count > 0 }}"
+                    then:
+                      - service: climate.set_hvac_mode
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          hvac_mode: heat
+                  - if:
+                      - condition: template
+                        value_template: "{{ switches | count > 0 }}"
+                    then:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: "{{ switches }}"
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_mode == 'heat' }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: "{{ climates | count > 0 }}"
+                    then:
+                      - service: climate.set_hvac_mode
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          hvac_mode: heat
+                      - service: climate.set_temperature
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          temperature: "{{ comfort_temp }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ switches | count > 0 }}"
+                    then:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: "{{ switches }}"
+
+# End of blueprint
