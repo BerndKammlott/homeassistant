@@ -39,16 +39,13 @@ blueprint:
         resume_mode:
             name: Resume mode
             description: Fixed temperature or just turn back on/heat
-            default: heat
+            default: "heat"
             selector:
                 select:
                     options:
-                        -   label: Heat
-                            value: heat
-                        -   label: Restore previous
-                            value: previous
-                        -   label: Off (testing)
-                            value: off
+                        - "heat"
+                        - "previous"
+                        - "off"  # for testing only
         comfort_temp:
             name: Comfort temperature (°C) when resuming (if not using previous)
             default: 20
