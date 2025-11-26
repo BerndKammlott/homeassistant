@@ -29,9 +29,9 @@ blueprint:
       selector:
         entity:
           multiple: true
-          include:
-            - domain: person
-            - domain: device_tracker
+          domain:
+            - person
+            - device_tracker
 
     climate_targets:
       name: Climate entities to control
