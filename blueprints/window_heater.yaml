@@ -1,0 +1,165 @@
+blueprint:
+  name: Pause heating when windows open (room)
+  description: Turn off heater(s) when any room window is open for a delay; resume when all closed.
+  domain: automation
+  input:
+    window_sensors:
+      name: Window/Door sensors (this room)
+      selector:
+        entity:
+          multiple: true
+          domain: binary_sensor
+          device_class:
+            - window
+            - door
+    climate_targets:
+      name: Climate entities (this room)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: climate
+    switch_targets:
+      name: Switch-based heaters (optional)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain: switch
+    open_delay:
+      name: Open delay (seconds)
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 900
+          unit_of_measurement: s
+          mode: slider
+          step: 5
+    resume_mode:
+      name: Resume mode
+      description: Fixed temperature or just turn back on/heat
+      default: heat
+      selector:
+        select:
+          options:
+            - heat
+            - previous
+            - off  # for testing only
+    comfort_temp:
+      name: Comfort temperature (°C) when resuming (if not using previous)
+      default: 21
+      selector:
+        number:
+          min: 5
+          max: 28
+          step: 0.5
+
+mode: parallel
+max: 10
+
+variables:
+  window_sensors: !input window_sensors
+  climates: !input climate_targets
+  switches: !input switch_targets
+  open_delay: !input open_delay
+  resume_mode: !input resume_mode
+  comfort_temp: !input comfort_temp
+
+trigger:
+  - platform: state
+    entity_id: !input window_sensors
+    to: 'on'
+    for:
+      seconds: !input open_delay
+  - platform: state
+    entity_id: !input window_sensors
+    to: 'off'
+    for:
+      seconds: 5
+
+condition: []
+
+action:
+  - choose:
+      # Any window opened long enough → turn heaters off
+      - conditions:
+          - condition: trigger
+            id: null
+          - condition: template
+            value_template: >
+              {{ trigger.to_state.state == 'on' }}
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ climates | count > 0 }}"
+            then:
+              - service: climate.turn_off
+                target:
+                  entity_id: "{{ climates }}"
+          - if:
+              - condition: template
+                value_template: "{{ switches | count > 0 }}"
+            then:
+              - service: switch.turn_off
+                target:
+                  entity_id: "{{ switches }}"
+
+      # All windows closed → resume
+      - conditions:
+          - condition: template
+            value_template: >
+              {% set any_open = window_sensors | select('is_state', 'on') | list | count > 0 %}
+              {{ not any_open }}
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_mode == 'previous' }}"
+                sequence:
+                  # Basic resume: set HVAC to heat/auto; restoring exact prior setpoint per-entity
+                  # usually needs helpers; here we resume to heat without set temp.
+                  - if:
+                      - condition: template
+                        value_template: "{{ climates | count > 0 }}"
+                    then:
+                      - service: climate.set_hvac_mode
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          hvac_mode: heat
+                  - if:
+                      - condition: template
+                        value_template: "{{ switches | count > 0 }}"
+                    then:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: "{{ switches }}"
+
+              - conditions:
+                  - condition: template
+                    value_template: "{{ resume_mode == 'heat' }}"
+                sequence:
+                  - if:
+                      - condition: template
+                        value_template: "{{ climates | count > 0 }}"
+                    then:
+                      - service: climate.set_hvac_mode
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          hvac_mode: heat
+                      - service: climate.set_temperature
+                        target:
+                          entity_id: "{{ climates }}"
+                        data:
+                          temperature: "{{ comfort_temp }}"
+                  - if:
+                      - condition: template
+                        value_template: "{{ switches | count > 0 }}"
+                    then:
+                      - service: switch.turn_on
+                        target:
+                          entity_id: "{{ switches }}"
+
+          # Optional: safety timeout could be added here with a timer helper
