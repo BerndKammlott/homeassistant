@@ -43,9 +43,12 @@ blueprint:
             selector:
                 select:
                     options:
-                        - "heat"
-                        - "previous"
-                        - "off"  # for testing only
+                        - label: "Heat"
+                          value: "heat"
+                        - label: "Restore previous"
+                          value: "previous"
+                        - label: "Off (testing)"
+                          value: "off"
         comfort_temp:
             name: Comfort temperature (°C) when resuming (if not using previous)
             default: 20
