@@ -1,0 +1,117 @@
+blueprint:
+  name: Steckdose — Only On When Someone Is Home
+  description: >-
+    Keeps the selected plug off unless at least one selected person is home.
+    Enforces state on HA start, on presence changes, and when the plug is toggled manually.
+  domain: automation
+  source_url: https://example.com/blueprints/steckdose_only_on_when_home
+
+  input:
+    target_switch:
+      name: Steckdose (Plug)
+      description: The switch entity to control
+      selector:
+        entity:
+          domain: switch
+
+    people:
+      name: People
+      description: One or more person entities considered “home” when present
+      selector:
+        entity:
+          domain: person
+          multiple: true
+
+    grace_on_seconds:
+      name: Arrival grace period (seconds)
+      description: Optional delay before turning the plug on after someone arrives
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 600
+          step: 1
+          unit_of_measurement: s
+          mode: slider
+
+    grace_off_seconds:
+      name: Departure grace period (seconds)
+      description: Optional delay before turning the plug off after everyone leaves
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1800
+          step: 1
+          unit_of_measurement: s
+          mode: slider
+
+    enforce_off_if_away:
+      name: Enforce off if turned on while away
+      description: If the plug is turned on manually while no one is home, force it off
+      default: true
+      selector:
+        boolean: {}
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  people: !input people
+  is_home: >-
+    {{ expand(people) | selectattr('state', 'eq', 'home') | list | count > 0 }}
+  enforce_off_if_away: !input enforce_off_if_away
+
+trigger:
+  - platform: state
+    entity_id: !input people
+    id: presence_change
+
+  - platform: state
+    entity_id: !input target_switch
+    to: "on"
+    id: manual_on
+
+  - platform: homeassistant
+    event: start
+    id: ha_start
+
+condition: []
+
+action:
+  - choose:
+      # If plug was turned on while away, enforce off (optional)
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'manual_on' }}"
+          - condition: template
+            value_template: "{{ not is_home }}"
+          - condition: template
+            value_template: "{{ enforce_off_if_away }}"
+        sequence:
+          - service: switch.turn_off
+            target:
+              entity_id: !input target_switch
+
+      # Presence-based control
+      - conditions:
+          - condition: template
+            value_template: "{{ is_home }}"
+        sequence:
+          - delay:
+              seconds: !input grace_on_seconds
+          - condition: template
+            value_template: "{{ is_home }}"  # re-check after delay
+          - service: switch.turn_on
+            target:
+              entity_id: !input target_switch
+
+    default:
+      # No one home → ensure off (with optional grace)
+      - delay:
+          seconds: !input grace_off_seconds
+      - condition: template
+        value_template: "{{ not is_home }}"  # re-check after delay
+      - service: switch.turn_off
+        target:
+          entity_id: !input target_switch
